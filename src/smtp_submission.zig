@@ -505,6 +505,36 @@ pub const Client = struct {
 };
 
 
+
+
+test "Command parsing" {
+    {
+        const cmd = try Command.parse(std.testing.allocator, "NOOP");
+        defer cmd.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("NOOP", cmd.cmd);
+        try std.testing.expect(cmd.args.len == 0);
+    }
+
+    {
+        const cmd = try Command.parse(std.testing.allocator, "auTH PLAIN garbage");
+        defer cmd.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("AUTH", cmd.cmd);
+        try std.testing.expect(cmd.args.len == 2);
+        try std.testing.expectEqualStrings("PLAIN", cmd.args[0]);
+        try std.testing.expectEqualStrings("garbage", cmd.args[1]);
+    }
+
+    {
+        const cmd = try Command.parse(std.testing.allocator, ""); // TODO: make this return an error
+        defer cmd.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("", cmd.cmd);
+        try std.testing.expect(cmd.args.len == 0);
+    }
+}
+
+
+
+
 const std = @import("std");
 const tls = @import("tls");
 const root = @import("root");

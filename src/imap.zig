@@ -465,6 +465,37 @@ fn call_cmd_handler(conn: *Connection, cmd: *const Command, comptime handler: an
 }
 
 
+
+
+test "Command parsing" {
+    {
+        const cmd = try Command.parse(std.testing.allocator, "tag", "NOOP");
+        defer cmd.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("tag", cmd.tag);
+        try std.testing.expectEqualStrings("NOOP", cmd.cmd);
+        try std.testing.expect(cmd.args.len == 0);
+    }
+
+    {
+        const cmd = try Command.parse(std.testing.allocator, "", "lOgIn admin hunter2");
+        defer cmd.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("LOGIN", cmd.cmd);
+        try std.testing.expect(cmd.args.len == 2);
+        try std.testing.expectEqualStrings("admin", cmd.args[0]);
+        try std.testing.expectEqualStrings("hunter2", cmd.args[1]);
+    }
+
+    {
+        const cmd = try Command.parse(std.testing.allocator, "", ""); // TODO: make this return an error
+        defer cmd.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings("", cmd.cmd);
+        try std.testing.expect(cmd.args.len == 0);
+    }
+}
+
+
+
+
 const std = @import("std");
 const tls = @import("tls");
 const root = @import("root");

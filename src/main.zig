@@ -78,36 +78,11 @@ fn is_str(T: type) bool {
 }
 
 
-test "Test connection" {
-    const url = "://mail-test.cam123.dev";
-    const uri = try std.Uri.parse(url);
-    const host = uri.host.?.percent_encoded;
-    const port = 993;
-
-    // Establish tcp connection
-    const address = std.net.Address.initIp4([4]u8{ 127, 0, 0, 1 }, port);
-    var tcp = try std.net.tcpConnectToAddress(address);
-    defer tcp.close();
-
-    // Load system root certificates
-    var root_ca = try tls.config.cert.fromSystem(std.testing.allocator);
-    defer root_ca.deinit(std.testing.allocator);
-
-    // Upgrade tcp connection to tls
-    var conn = try tls.client(tcp, .{
-        .host = host,
-        .root_ca = root_ca,
-    });
-    var msg: std.ArrayListUnmanaged(u8) = .{};
-    defer msg.deinit(std.testing.allocator);
-
-    // Print response
-    while (try conn.next()) |data| {
-        try msg.appendSlice(std.testing.allocator, data);
-    }
-    try conn.close();
-
-    try std.testing.expectEqualStrings("Hello\n", msg.items);
+test "import_tests" {
+    // Just need to reference the imports for files that have tests to get them to run with `zig build test`
+    _ = imap;
+    _ = smtp;
+    _ = sqlite;
 }
 
 
