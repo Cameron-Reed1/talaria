@@ -28,7 +28,7 @@
 
     // Tracks the earliest Zig version that the package considers to be a
     // supported use case.
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.15.1",
 
     // This field is optional.
     // Each dependency must either provide a `url` and `hash`, or a `path`.
@@ -37,8 +37,8 @@
     // internet connectivity.
     .dependencies = .{
         .tls = .{
-            .url = "git+https://github.com/ianic/tls.zig.git#55845f755d9e2e821458ea55693f85c737cd0c7a",
-            .hash = "tls-0.1.0-ER2e0m43BQAshi8ixj1qf3w2u2lqKtXtkrxUJ4AGZDcl",
+            .url = "git+https://github.com/ianic/tls.zig.git#fd11fcfa77628bc2fb9de7fd1fecfe89339c93fc",
+            .hash = "tls-0.1.0-ER2e0mRIBQCvHQz8kf9k3xHQDwz4WH71ht44JoVycYmL",
         },
     },
     .paths = .{

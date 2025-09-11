@@ -107,8 +107,8 @@ fn handle_data(conn: *Connection) !void {
 fn handle_binary_data(conn: *Connection, len_s: []const u8, terminating: []const u8) !void {
     _ = terminating;
     const len = try std.fmt.parseInt(usize, len_s, 10);
-    const buf = try conn.allocator.alloc(u8, len);
-    _ = try conn.reader.readAll(buf);
+    const buf = try conn.reader.readAlloc(conn.allocator, len);
+    defer conn.allocator.free(buf);
     try conn.state.message.appendSlice(conn.allocator, buf);
 
     logger.info("New message that needs to be sent:\n\tFrom: {s}\n\tRecipients: {s}\n\tMessage: {s}", .{ conn.state.from.?, conn.state.to.items, conn.state.message.items });
@@ -213,8 +213,8 @@ const SMTPState = struct {
 
 const Connection = struct {
     allocator: std.mem.Allocator,
-    reader: std.io.AnyReader,
-    buffered_writer: *std.io.BufferedWriter(4096, std.io.AnyWriter),
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
     state: SMTPState,
     read_buf: [8192]u8,
 
@@ -225,11 +225,11 @@ const Connection = struct {
     fn read_line(self: *Connection) ![]const u8 {
         var idx: u16 = 0;
         var c1: u8 = 0;
-        var c2: u8 = try self.reader.readByte();
+        var c2: u8 = try self.reader.takeByte();
 
         while (idx < self.read_buf.len) {
             c1 = c2;
-            c2 = try self.reader.readByte();
+            c2 = try self.reader.takeByte();
 
             if (c1 == '\r' and c2 == '\n') {
                 return self.read_buf[0..idx];
@@ -257,13 +257,13 @@ const Connection = struct {
         if (msg.continued) {
             const fmt = "{}-{s}";
             logger.debug(fmt, .{ msg.code, msg.text });
-            try std.fmt.format(self.buffered_writer.writer(), fmt ++ "\r\n", .{ msg.code, msg.text });
+            try self.writer.print(fmt ++ "\r\n", .{ msg.code, msg.text });
         } else {
             const fmt = "{} {s}";
             logger.debug(fmt, .{ msg.code, msg.text });
-            try std.fmt.format(self.buffered_writer.writer(), fmt ++ "\r\n", .{ msg.code, msg.text });
+            try self.writer.print(fmt ++ "\r\n", .{ msg.code, msg.text });
         }
-        try self.buffered_writer.flush();
+        try self.writer.flush();
     }
 
     fn deinit(self: *Connection) void {
@@ -352,14 +352,18 @@ pub const Server = struct {
         var ca: std.heap.ArenaAllocator = .init(allocator);
         defer ca.deinit();
 
-        var tls_stream = tls.server(tcp.stream, .{ .auth = self.auth }) catch |err| {
+        var tls_stream = tls.serverFromStream(tcp.stream, .{ .auth = self.auth }) catch |err| {
             logger.err("TLS error: {}", .{err});
             return;
         };
         defer tls_stream.close() catch {};
-        const reader = tls_stream.reader();
-        var bw = std.io.bufferedWriter(tls_stream.writer());
-        var conn = Connection{ .allocator = ca.allocator(), .reader = reader, .buffered_writer = &bw, .read_buf = undefined, .state = .default };
+
+        var read_buf: [2048]u8 = undefined;
+        var write_buf: [2048]u8 = undefined;
+        var reader = tls_stream.reader(&read_buf);
+        var writer = tls_stream.writer(&write_buf);
+
+        var conn = Connection{ .allocator = ca.allocator(), .reader = &reader.interface, .writer = &writer.interface, .read_buf = undefined, .state = .default };
         defer conn.deinit();
 
         conn.send(Response{ .code = 220, .continued = false, .text = "mail-test.cam123.dev Service ready" }) catch {
@@ -374,7 +378,7 @@ pub const Server = struct {
                 else => break,
             };
             defer cmd.deinit(conn.allocator);
-            logger.debug("{s} {s}", .{ cmd.cmd, cmd.args });
+            logger.debug("{s} {f}", .{ cmd.cmd, utils.fmt.strSlice(cmd.args) });
 
 
             if (handlers.get(cmd.cmd)) |cmd_handler| {
@@ -540,3 +544,4 @@ const tls = @import("tls");
 const root = @import("root");
 
 const sasl = @import("sasl.zig");
+const utils = @import("utils.zig");

@@ -1,7 +1,7 @@
 pub var shut_down: std.atomic.Value(bool) = .init(false);
 
 
-fn exit_signal(_: i32) callconv(.C) void {
+fn exit_signal(_: i32) callconv(.c) void {
     shut_down.store(true, .release);
 }
 
@@ -17,7 +17,7 @@ pub fn main() !void {
 
     const exit_handler = std.posix.Sigaction{
         .handler = .{ .handler = exit_signal },
-        .mask = std.posix.empty_sigset,
+        .mask = std.posix.sigemptyset(),
         .flags = std.posix.SA.RESETHAND,
     };
     std.posix.sigaction(std.posix.SIG.INT, &exit_handler, null);

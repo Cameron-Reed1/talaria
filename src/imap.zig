@@ -27,8 +27,8 @@ const Connection = struct {
 
     allocator: std.mem.Allocator,
     fd: std.posix.fd_t,
-    reader: std.io.AnyReader,
-    writer: std.io.AnyWriter,
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
     logged_out: bool,
     user: ?[]const u8,
     mailbox: ?mailbox.Mailbox,
@@ -55,8 +55,8 @@ const Connection = struct {
         };
         if (try std.posix.poll(&pollfd, 100) == 0) return error.Timeout;
 
-        const tag = try self.reader.readUntilDelimiter(&self.read_buf, ' ');
-        var input = self.reader.readUntilDelimiter(self.read_buf[tag.len..self.read_buf.len], '\n') catch |err| {
+        const tag = try self.reader.takeDelimiterExclusive(' '); // TODO: with the new readers, this can be invalidated by the next line. I already wanted to move to a read_line style like in smtp, but now it's real important
+        var input = self.reader.takeDelimiterExclusive('\n') catch |err| {
             if (err == error.StreamTooLong) {
                 try self.send(.{ .tag = tag, .type = .bad, .text = "Command too long" });
             }
@@ -97,22 +97,15 @@ const Connection = struct {
     }
 
     fn send(self: *Connection, msg: Response) !void {
-        const tag = if (msg.tag) |t| t else "*";
-        _ = try self.writer.writeAll(tag);
-        _ = try self.writer.writeAll(" ");
+        const tag = msg.tag orelse "*";
 
         if (msg.type == .exists) {
             logger.debug("{s} {s} {s}", .{ tag, msg.text, msg.type.str() });
-            _ = try self.writer.writeAll(msg.text);
-            _ = try self.writer.writeAll(" ");
-            _ = try self.writer.writeAll(msg.type.str());
+            try self.writer.print("{s} {s} {s}\r\n", .{ tag, msg.text, msg.type.str() });
         } else {
             logger.debug("{s} {s} {s}", .{ tag, msg.type.str(), msg.text });
-            _ = try self.writer.writeAll(msg.type.str());
-            _ = try self.writer.writeAll(" ");
-            _ = try self.writer.writeAll(msg.text);
+            try self.writer.print("{s} {s} {s}\r\n", .{ tag, msg.type.str(), msg.text });
         }
-        _ = try self.writer.writeAll("\r\n");
     }
 
     fn bye(self: *Connection) !void {
@@ -361,14 +354,18 @@ pub const Server = struct {
         var ca: std.heap.ArenaAllocator = .init(allocator);
         defer ca.deinit();
 
-        var tls_stream = tls.server(tcp.stream, .{ .auth = self.auth }) catch |err| {
+        var tls_stream = tls.serverFromStream(tcp.stream, .{ .auth = self.auth }) catch |err| {
             logger.err("TLS error: {}", .{ err });
             return;
         };
         defer tls_stream.close() catch {};
-        const reader = tls_stream.reader();
-        const writer = tls_stream.writer();
-        var conn = Connection{ .allocator = ca.allocator(), .logged_out = false, .user = null, .fd = tcp.stream.handle, .reader = reader, .writer = writer, .read_buf = undefined, .mailbox = null };
+
+        var read_buf: [2048]u8 = undefined;
+        var write_buf: [2048]u8 = undefined;
+        var reader = tls_stream.reader(&read_buf);
+        var writer = tls_stream.writer(&write_buf);
+
+        var conn = Connection{ .allocator = ca.allocator(), .logged_out = false, .user = null, .fd = tcp.stream.handle, .reader = &reader.interface, .writer = &writer.interface, .read_buf = undefined, .mailbox = null };
 
         conn.send(Response{ .tag = null, .type = .ok, .text = "[CAPABILITY IMAP4rev2 AUTH=PLAIN] IMAP4rev2 Service Ready" }) catch {
         // conn.send(Response{ .tag = null, .type = .ok, .text = "IMAP4rev2 Service Ready" }) catch {
