@@ -1,14 +1,14 @@
 const command_handler = *const fn(conn: *Connection, cmd: *const Command) anyerror!void;
 const handlers: std.StaticStringMap(command_handler) = .initComptime(.{
-    .{ "NOOP", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_noop); } }.handle },
-    .{ "LOGOUT", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_logout); } }.handle },
-    .{ "CAPABILITY", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_capability); } }.handle },
-    .{ "STARTTLS", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_starttls); } }.handle },
-    .{ "AUTHENTICATE", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_authenticate); } }.handle },
-    .{ "LOGIN", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_login); } }.handle },
-    .{ "ENABLE", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_enable); } }.handle },
-    .{ "SELECT", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_select); } }.handle },
-    .{ "EXAMINE", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_examine); } }.handle },
+    .{ "NOOP", wrap_cmd_handler(handle_noop) },
+    .{ "LOGOUT", wrap_cmd_handler(handle_logout) },
+    .{ "CAPABILITY", wrap_cmd_handler(handle_capability) },
+    .{ "STARTTLS", wrap_cmd_handler(handle_starttls) },
+    .{ "AUTHENTICATE", wrap_cmd_handler(handle_authenticate) },
+    .{ "LOGIN", wrap_cmd_handler(handle_login) },
+    .{ "ENABLE", wrap_cmd_handler(handle_enable) },
+    .{ "SELECT", wrap_cmd_handler(handle_select) },
+    .{ "EXAMINE", wrap_cmd_handler(handle_examine) },
 });
 
 
@@ -98,13 +98,14 @@ const Connection = struct {
 
     fn send(self: *Connection, msg: Response) !void {
         const tag = msg.tag orelse "*";
+        const fmt = "{s} {s} {s}";
 
         if (msg.type == .exists) {
-            logger.debug("{s} {s} {s}", .{ tag, msg.text, msg.type.str() });
-            try self.writer.print("{s} {s} {s}\r\n", .{ tag, msg.text, msg.type.str() });
+            logger.debug(fmt, .{ tag, msg.text, msg.type.str() });
+            try self.writer.print(fmt ++ "\r\n", .{ tag, msg.text, msg.type.str() });
         } else {
-            logger.debug("{s} {s} {s}", .{ tag, msg.type.str(), msg.text });
-            try self.writer.print("{s} {s} {s}\r\n", .{ tag, msg.type.str(), msg.text });
+            logger.debug(fmt, .{ tag, msg.type.str(), msg.text });
+            try self.writer.print(fmt ++ "\r\n", .{ tag, msg.type.str(), msg.text });
         }
     }
 
@@ -401,19 +402,38 @@ pub const Server = struct {
     }
 };
 
-fn call_cmd_handler(conn: *Connection, cmd: *const Command, comptime handler: anytype) !void {
+
+
+
+fn wrap_cmd_handler(comptime handler: anytype) command_handler {
+    @setEvalBranchQuota(4000); // I think this is necessary because there is a function inside this function
     const handler_info = @typeInfo(@TypeOf(handler));
     if (handler_info != .@"fn") {
-        @compileError("call_cmd_handler: handler must be a function, not " ++ @typeName(@TypeOf(handler)));
+        @compileError("wrap_cmd_handler: handler must be a function, not " ++ @typeName(@TypeOf(handler)));
     }
 
     const params = handler_info.@"fn".params;
     if (params.len < 2 or params[0].type != *Connection or params[1].type != *const Command) {
-        @compileError("call_cmd_handler: handler must take a " ++ @typeName(*Connection) ++ " and a " ++ @typeName(*const Command) ++ " as its first two arguments");
+        @compileError("wrap_cmd_handler: handler must take a " ++ @typeName(*Connection) ++ " and a " ++ @typeName(*const Command) ++ " as its first two arguments");
     }
 
-    if (cmd.args.len != params.len - 2 and params[params.len - 1].type.? != []const []const u8) {
-        return error.InvalidArguments;
+    comptime var param_count: u16 = 0;
+    comptime var optional_param_count: u16 = 0;
+    comptime var accepts_extra_params = false;
+
+    inline for (params[2..params.len], 2..) |param, i| {
+        switch (param.type.?) {
+            []const u8 => {
+                if (optional_param_count != 0) @compileError("Optional parameters must come after all required parameters in command handlers");
+                param_count += 1;
+            },
+            ?[]const u8 => optional_param_count += 1,
+            []const []const u8 => {
+                if (i != params.len - 1) @compileError("Invalid parameter type in command handler: " ++ @typeName(param.type.?) ++ " is only valid as the last parameter");
+                accepts_extra_params = true;
+            },
+            else => @compileError("Invalid parameter type in command handler: " ++ @typeName(param.type.?)),
+        }
     }
 
     comptime var fields: [params.len]std.builtin.Type.StructField = undefined;
@@ -440,25 +460,29 @@ fn call_cmd_handler(conn: *Connection, cmd: *const Command, comptime handler: an
     };
     const args_type: type = @Type(std.builtin.Type{ .@"struct" = args_type_info });
 
-    var args: args_type = undefined;
-    @field(args, "0") = conn;
-    @field(args, "1") = cmd;
 
-    inline for (params[2..params.len], 2..) |param, i| {
-        switch (param.type.?) {
-            []const u8 => @field(args, std.fmt.comptimePrint("{}", .{ i })) = cmd.args[i - 2],
-            []const []const u8 => {
-                if (i != params.len - 1) {
-                    @compileError("Invalid parameter type in command handler: " ++ @typeName(param.type.?) ++ " is only valid as the last parameter");
-                } else {
-                    @field(args, std.fmt.comptimePrint("{}", .{ i })) = cmd.args[i - 2..cmd.args.len];
+    return struct {
+        fn _handler(conn: *Connection, cmd: *const Command) !void {
+            if (cmd.args.len < param_count or (cmd.args.len > param_count + optional_param_count and !accepts_extra_params)) {
+                return error.InvalidArguments;
+            }
+
+            var args: args_type = undefined;
+            @field(args, "0") = conn;
+            @field(args, "1") = cmd;
+
+            inline for (params[2..params.len], 2..) |param, i| {
+                switch (param.type.?) {
+                    []const u8 => @field(args, std.fmt.comptimePrint("{}", .{ i })) = cmd.args[i - 2],
+                    ?[]const u8 => @field(args, std.fmt.comptimePrint("{}", .{ i })) = if (cmd.args.len <= i - 2) null else cmd.args[i - 2],
+                    []const []const u8 => @field(args, std.fmt.comptimePrint("{}", .{ i })) = cmd.args[i - 2..cmd.args.len],
+                    else => unreachable,
                 }
-            },
-            else => @compileError("Invalid parameter type in command handler: " ++ @typeName(param.type.?)),
-        }
-    }
+            }
 
-    try @call(.auto, handler, args);
+            try @call(.auto, handler, args);
+        }
+    }._handler;
 }
 
 

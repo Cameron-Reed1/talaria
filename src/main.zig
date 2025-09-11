@@ -25,21 +25,10 @@ pub fn main() !void {
     try db_manager.init();
     defer db_manager.deinit();
 
-    // var r: [1]u8 = undefined;
-    // try std.posix.getrandom(&r);
-    // print_struct(.{ .rand = r[0], .first = 2, .second = 3, .name = "poppy", .popcorn = true });
-    // try std.posix.getrandom(&r);
-    // print_struct(.{ .rand = r[0], .first = 2, .second = 3, .name = "poppy", .popcorn = true });
-    //
-    // if (true) return;
-
     // Load server certificate key pair
     const cert_dir = try std.fs.cwd().openDir("/etc/letsencrypt/live/", .{});
     var auth = try tls.config.CertKeyPair.fromFilePath(allocator, cert_dir, "mail-test/fullchain.pem", "mail-test/privkey.pem");
     defer auth.deinit(allocator);
-
-    const hostname = "mail-test.cam123.dev";
-    _ = hostname;
 
     var imap_server = imap.Server{ .address = [4]u8{127, 0, 0, 1}, .auth = &auth };
     var submission_server = smtp.Server{ .address = [4]u8{127, 0, 0, 1}, .auth = &auth };
@@ -57,24 +46,6 @@ pub fn main() !void {
     submission_thread.join();
 
     std.debug.print("Goodbye o/\n", .{});
-}
-
-pub fn print_struct(s: anytype) void {
-    const fields = @typeInfo(@TypeOf(s)).@"struct".fields;
-    inline for (fields) |field| {
-        const fmt = comptime if (is_str(field.type)) "{s}: {s} = {s}\n" else "{s}: {s} = {any}\n";
-        std.debug.print(fmt, .{ field.name, @typeName(field.type), @field(s, field.name) });
-    }
-}
-
-fn is_str(T: type) bool {
-    const type_info = @typeInfo(T);
-    if (type_info != .pointer) return false;
-    if (type_info.pointer.child == u8 and type_info.pointer.size != .one) return true;
-
-    const child_info = @typeInfo(type_info.pointer.child);
-    if (child_info != .array) return false;
-    return child_info.array.child == u8;
 }
 
 

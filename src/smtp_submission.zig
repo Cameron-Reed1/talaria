@@ -1,20 +1,20 @@
 const command_handler = *const fn(conn: *Connection, cmd: *const Command) anyerror!void;
 const handlers: std.StaticStringMap(command_handler) = .initComptime(.{
-    .{ "EHLO", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_ex_hello); } }.handle },
-    .{ "HELO", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_hello); } }.handle },
-    .{ "MAIL", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_mail); } }.handle },
-    .{ "RCPT", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_receipt); } }.handle },
-    .{ "DATA", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_data); } }.handle },
-    .{ "RSET", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_reset); } }.handle },
+    .{ "EHLO", wrap_cmd_handler(handle_ex_hello) },
+    .{ "HELO", wrap_cmd_handler(handle_hello) },
+    .{ "MAIL", wrap_cmd_handler(handle_mail) },
+    .{ "RCPT", wrap_cmd_handler(handle_receipt) },
+    .{ "DATA", wrap_cmd_handler(handle_data) },
+    .{ "RSET", wrap_cmd_handler(handle_reset) },
     .{ "VRFY", handle_unimplemented },
     .{ "EXPN", handle_unimplemented },
     .{ "HELP", handle_unimplemented },
-    .{ "NOOP", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_noop); } }.handle },
-    .{ "QUIT", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_quit); } }.handle },
+    .{ "NOOP", wrap_cmd_handler(handle_noop) },
+    .{ "QUIT", wrap_cmd_handler(handle_quit) },
     .{ "STARTTLS", handle_unimplemented },
-    .{ "AUTH", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_auth); } }.handle },
+    .{ "AUTH", wrap_cmd_handler(handle_auth) },
     .{ "ATRN", handle_unimplemented },
-    .{ "BDAT", struct { fn handle(conn: *Connection, cmd: *const Command) !void { return call_cmd_handler(conn, cmd, handle_binary_data); } }.handle },
+    .{ "BDAT", wrap_cmd_handler(handle_binary_data) },
     .{ "ETRN", handle_unimplemented },
 });
 
@@ -399,15 +399,19 @@ pub const Server = struct {
     }
 };
 
-fn call_cmd_handler(conn: *Connection, cmd: *const Command, comptime handler: anytype) !void {
+
+
+
+fn wrap_cmd_handler(comptime handler: anytype) command_handler {
+    @setEvalBranchQuota(4000); // I think this is necessary because there is a function inside this function
     const handler_info = @typeInfo(@TypeOf(handler));
     if (handler_info != .@"fn") {
-        @compileError("call_cmd_handler: handler must be a function, not " ++ @typeName(@TypeOf(handler)));
+        @compileError("wrap_cmd_handler: handler must be a function, not " ++ @typeName(@TypeOf(handler)));
     }
 
     const params = handler_info.@"fn".params;
     if (params.len < 1 or params[0].type != *Connection) {
-        @compileError("call_cmd_handler: handler must take a " ++ @typeName(*Connection) ++ " as its first argument");
+        @compileError("wrap_cmd_handler: handler must take a " ++ @typeName(*Connection) ++ " as its first argument");
     }
 
     comptime var param_count: u16 = 0;
@@ -427,10 +431,6 @@ fn call_cmd_handler(conn: *Connection, cmd: *const Command, comptime handler: an
             },
             else => @compileError("Invalid parameter type in command handler: " ++ @typeName(param.type.?)),
         }
-    }
-
-    if (cmd.args.len < param_count or (cmd.args.len > param_count + optional_param_count and !accepts_extra_params)) {
-        return error.InvalidArguments;
     }
 
     comptime var fields: [params.len]std.builtin.Type.StructField = undefined;
@@ -457,56 +457,29 @@ fn call_cmd_handler(conn: *Connection, cmd: *const Command, comptime handler: an
     };
     const args_type: type = @Type(std.builtin.Type{ .@"struct" = args_type_info });
 
-    var args: args_type = undefined;
-    @field(args, "0") = conn;
 
-    inline for (params[1..params.len], 1..) |param, i| {
-        switch (param.type.?) {
-            []const u8 => @field(args, std.fmt.comptimePrint("{}", .{ i })) = cmd.args[i - 1],
-            ?[]const u8 => @field(args, std.fmt.comptimePrint("{}", .{ i })) = if (cmd.args.len <= i - 1) null else cmd.args[i - 1],
-            []const []const u8 => @field(args, std.fmt.comptimePrint("{}", .{ i })) = cmd.args[i - 1..cmd.args.len],
-            else => unreachable,
+    return struct {
+        fn _handler(conn: *Connection, cmd: *const Command) !void {
+            if (cmd.args.len < param_count or (cmd.args.len > param_count + optional_param_count and !accepts_extra_params)) {
+                return error.InvalidArguments;
+            }
+
+            var args: args_type = undefined;
+            @field(args, "0") = conn;
+
+            inline for (params[1..params.len], 1..) |param, i| {
+                switch (param.type.?) {
+                    []const u8 => @field(args, std.fmt.comptimePrint("{}", .{ i })) = cmd.args[i - 1],
+                    ?[]const u8 => @field(args, std.fmt.comptimePrint("{}", .{ i })) = if (cmd.args.len <= i - 1) null else cmd.args[i - 1],
+                    []const []const u8 => @field(args, std.fmt.comptimePrint("{}", .{ i })) = cmd.args[i - 1..cmd.args.len],
+                    else => unreachable,
+                }
+            }
+
+            try @call(.always_inline, handler, args);
         }
-    }
-
-    try @call(.always_inline, handler, args);
+    }._handler;
 }
-
-
-pub const Client = struct {
-    // pub fn send_message(allocator: std.mem.Allocator, from: []const u8, to: [][]const u8, message: []const u8) !void {
-    //     for (to) |recipient| {
-    //         var iter = std.mem.splitScalar(u8, recipient, '@');
-    //         if (iter.next() == null) return error.A;
-    //         const domain = iter.next();
-    //         if (domain == null) return error.A;
-    //         if (iter.next() != null) return error.A;
-    //
-    //         const stream = try std.net.tcpConnectToHost(allocator, domain, 25);
-    //
-    //         read_response(); // Should be 221
-    //         stream.writeAll("EHLO mail-test.cam123.dev");
-    //         read_response(); // Read until the response isn't continued, and check if STARTTLS is available
-    //         if (starttls) {
-    //             stream.writeAll("STARTTLS");
-    //             read_response(); // Check that it is valid
-    //             // Then start tls
-    //         }
-    //
-    //         stream.writeAll("MAIL FROM:{from}");
-    //         read_response(); // Check that it is valid
-    //         stream.writeAll("RCPT TO:{recipient}");
-    //         read_response(); // Check that it is valid
-    //         stream.writeAll("DATA");
-    //         read_response(); // Check that it is valid
-    //         stream.writeAll("{mesage}\r\n.\r\n");
-    //         read_response(); // Check that it is valid
-    //         stream.writeAll("QUIT");
-    //         read_response(); // Check that it is valid
-    //         stream.close();
-    //     }
-    // }
-};
 
 
 
