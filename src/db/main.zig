@@ -34,7 +34,7 @@ pub fn init() !void {
                 if (res.get_int(0) == 0) break :blk null;
             }
 
-            { // If id does, attempt to grab the schema version
+            { // If it does, attempt to grab the schema version
                 var res = try DBInfoTable.select(1, .{ .schema_version }, "ORDER BY id DESC LIMIT 1", .{});
                 defer res.close();
 
