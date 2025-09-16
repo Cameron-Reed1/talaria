@@ -51,7 +51,7 @@ fn username_to_id(username: []const u8) !i64 {
 }
 
 fn id_to_db_name(allocator: std.mem.Allocator, id: i64) ![:0]const u8 {
-    return try std.fmt.allocPrintSentinel(allocator, "{d}.db", .{ id }, 0);
+    return try std.fmt.allocPrintSentinel(allocator, "{s}/{d}.db", .{ cfg.values.user_db_path, id }, 0);
 }
 
 
@@ -71,6 +71,7 @@ pub fn get_id(allocator: std.mem.Allocator, id: i64) !UserDB {
 
 
 const std = @import("std");
+const cfg = @import("config");
 
 const main_db = @import("main.zig");
 const sqlite = @import("sqlite.zig");

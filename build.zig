@@ -16,6 +16,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseSafe });
 
     const tls_mod = b.dependency("tls", .{ .target = target, .optimize = optimize }).module("tls");
+    const args_mod = b.dependency("zigargs", .{ .target = target, .optimize = optimize }).module("zigargs");
 
     // This creates a "module", which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
@@ -30,6 +31,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const config_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/config.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    config_mod.addImport("args", args_mod);
+
     // This creates another `std.Build.Step.Compile`, but this one builds an executable
     // rather than a static library.
     const exe = b.addExecutable(.{
@@ -37,6 +45,7 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
     exe.root_module.addImport("tls", tls_mod);
+    exe.root_module.addImport("config", config_mod);
     exe.linkLibC();
     exe.linkSystemLibrary("sqlite3");
 

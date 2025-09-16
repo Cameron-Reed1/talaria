@@ -22,7 +22,14 @@ pub fn main() !void {
     };
     std.posix.sigaction(std.posix.SIG.INT, &exit_handler, null);
 
-    try db.init();
+    cfg.init(allocator) catch |err| switch (err) {
+        error.UnknownArgument, error.MissingArgumentValue, error.MissingPositionalArgument,
+        error.BadPositionalArguments, error.InvalidInteger => return,
+        else => return err,
+    };
+    defer cfg.deinit();
+
+    try db.init(allocator);
     defer db.deinit();
 
     // Load server certificate key pair
@@ -59,6 +66,7 @@ test "import_tests" {
 
 const std = @import("std");
 const tls = @import("tls");
+const cfg = @import("config");
 
 const imap = @import("imap.zig");
 const smtp = @import("smtp_submission.zig");

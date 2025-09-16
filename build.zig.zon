@@ -40,6 +40,10 @@
             .url = "git+https://github.com/ianic/tls.zig.git#fd11fcfa77628bc2fb9de7fd1fecfe89339c93fc",
             .hash = "tls-0.1.0-ER2e0mRIBQCvHQz8kf9k3xHQDwz4WH71ht44JoVycYmL",
         },
+        .zigargs = .{
+            .url = "git+https://github.com/Cameron-Reed1/Zig-Argument-Parser.git#83b045fd5d01032904d9336f614d3ffd114e4d71",
+            .hash = "zigargs-0.1.0-jXUX3aE_AACkfs6ZEm6bRbX_mKCp42d6FbKhbzPK28_Z",
+        },
     },
     .paths = .{
         "build.zig",

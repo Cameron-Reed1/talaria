@@ -18,9 +18,13 @@ const schema_version: i64 = -1;
 const logger = std.log.scoped(.main_db);
 
 
-pub fn init() !void {
+pub fn init(allocator: std.mem.Allocator) !void {
     if (db_handle == null) {
-        db_handle = try sqlite.open("./talaria.db");
+        db_handle = blk: {
+            const file = try allocator.dupeZ(u8, cfg.values.db_path);
+            defer allocator.free(file);
+            break :blk try sqlite.open(file);
+        };
 
         DBInfoTable.db_handle = db_handle.?;
         UsersTable.db_handle = db_handle.?;
@@ -78,5 +82,6 @@ pub fn deinit() void {
 
 const std = @import("std");
 const builtin = @import("builtin");
+const cfg = @import("config");
 
 const sqlite = @import("sqlite.zig");
