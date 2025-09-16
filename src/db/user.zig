@@ -61,6 +61,10 @@ pub fn get(allocator: std.mem.Allocator, username: []const u8) !UserDB {
 }
 
 pub fn get_id(allocator: std.mem.Allocator, id: i64) !UserDB {
+    std.fs.cwd().makeDir(cfg.values.user_db_path) catch |err| {
+        if (err != error.PathAlreadyExists) return err;
+    };
+
     const file = try id_to_db_name(allocator, id);
     defer allocator.free(file);
     const db_handle = try sqlite.open(file);
