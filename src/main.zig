@@ -22,8 +22,8 @@ pub fn main() !void {
     };
     std.posix.sigaction(std.posix.SIG.INT, &exit_handler, null);
 
-    try db_manager.init();
-    defer db_manager.deinit();
+    try db.init();
+    defer db.deinit();
 
     // Load server certificate key pair
     const cert_dir = try std.fs.cwd().openDir("/etc/letsencrypt/live/", .{});
@@ -53,7 +53,7 @@ test "import_tests" {
     // Just need to reference the imports for files that have tests to get them to run with `zig build test`
     _ = imap;
     _ = smtp;
-    _ = sqlite;
+    _ = @import("db/sqlite.zig");
 }
 
 
@@ -62,6 +62,5 @@ const tls = @import("tls");
 
 const imap = @import("imap.zig");
 const smtp = @import("smtp_submission.zig");
-const sqlite = @import("sqlite.zig");
 const user_store = @import("user_store.zig");
-const db_manager = @import("db_manager.zig");
+const db = @import("db/main.zig");

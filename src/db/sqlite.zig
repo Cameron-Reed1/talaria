@@ -5,13 +5,112 @@ const SqliteError = error {
 };
 
 
-const Permissions = packed struct(u3) {
-    execute: u1,
-    write: u1,
-    read: u1,
-};
 
 pub const DB = c.sqlite3;
+
+
+pub const TableColumn = struct {
+    name: [:0]const u8, // std.builtin.Type.EnumField requires a null-terminated string
+    db_type: []const u8,
+};
+
+
+pub fn Table(table_name: []const u8, table_columns: []const TableColumn, table_constraints: ?[]const []const u8) type {
+    comptime var column_fields: [table_columns.len]std.builtin.Type.EnumField = undefined;
+    inline for (table_columns, 0..) |column, i| {
+        column_fields[i] = std.builtin.Type.EnumField{ .name = column.name, .value = i };
+    }
+
+    const column_type_info = std.builtin.Type.Enum{
+        .tag_type = @Type(.{ .int = std.builtin.Type.Int{ .bits = std.math.log2(table_columns.len) + 1, .signedness = .unsigned } }),
+        .fields = &column_fields,
+        .decls = &[0]std.builtin.Type.Declaration{},
+        .is_exhaustive = true,
+    };
+    const column_type = @Type(.{ .@"enum" = column_type_info });
+
+    return struct {
+        const Column = column_type;
+        const Self = @This();
+
+        db_handle: *DB = undefined,
+
+        pub fn create(self: *const Self) !void {
+            comptime var query_str: []const u8 = "CREATE TABLE IF NOT EXISTS " ++ table_name ++ " (";
+
+            comptime var first = true;
+            inline for (table_columns) |column| {
+                if (!first) {
+                    query_str = query_str ++ ", ";
+                }
+                query_str = query_str ++ column.name ++ " " ++ column.db_type;
+                first = false;
+            }
+
+            if (table_constraints) |constraints| {
+                inline for(constraints) |constraint| {
+                    query_str = query_str ++ ", " ++ constraint;
+                }
+            }
+            query_str = query_str ++ ")";
+
+            try exec(self.db_handle, query_str, .{});
+        }
+
+        pub fn select(self: *const Self, comptime n: usize, comptime columns: [n]Column, comptime extra: ?[]const u8, args: anytype) !Result {
+            comptime var query_str: []const u8 = "SELECT ";
+
+            if (n == 0) {
+                query_str = query_str ++ "* ";
+            } else {
+                comptime var first = true;
+                inline for (columns) |col| {
+                    if (!first) {
+                        query_str = query_str ++ ", ";
+                    }
+                    query_str = query_str ++ @tagName(col);
+                    first = false;
+                }
+            }
+
+            query_str = query_str ++ " FROM " ++ table_name;
+            if (extra) |ex| {
+                query_str = query_str ++ " " ++ ex;
+            }
+
+            return query(self.db_handle, query_str, args);
+        }
+
+        pub fn insert(self: *const Self, comptime n: usize, comptime columns: [n]Column, values: anytype) !i64 {
+            comptime var query_str: []const u8 = "INSERT INTO " ++ table_name ++ "(";
+
+            comptime var first = true;
+            inline for (columns) |col| {
+                if (!first) {
+                    query_str = query_str ++ ", ";
+                }
+                query_str = query_str ++ @tagName(col);
+                first = false;
+            }
+
+            query_str = query_str ++ ") values(";
+            first = true;
+            inline for (columns) |_| {
+                if (!first) {
+                    query_str = query_str ++ ", ";
+                }
+                query_str = query_str ++ "?";
+                first = false;
+            }
+            query_str = query_str ++ ")";
+
+            try exec(self.db_handle, query_str, values);
+            return last_insert_id(self.db_handle);
+        }
+    };
+}
+
+
 
 pub const Result = struct {
     statement: *c.sqlite3_stmt,
@@ -129,20 +228,15 @@ fn bind(statement: *c.sqlite3_stmt, index: u32, value: anytype) c_int {
                 @compileError("Cannot bind type of " ++ @typeName(@TypeOf(value)) ++ " to sqlite statement");
             }
         },
+        .optional => {
+            if (value == null) {
+                return bind(statement, index, null);
+            } else {
+                return bind(statement, index, value.?);
+            }
+        },
         else => @compileError("Cannot bind type of " ++ @typeName(@TypeOf(value)) ++ " to sqlite statement"),
     }
-}
-
-
-test "Packed struct to int" {
-    try std.testing.expect(@as(u3, @bitCast(Permissions{ .read = 0, .write = 0, .execute = 0 })) == 0);
-    try std.testing.expect(@as(u3, @bitCast(Permissions{ .read = 0, .write = 0, .execute = 1 })) == 1);
-    try std.testing.expect(@as(u3, @bitCast(Permissions{ .read = 0, .write = 1, .execute = 0 })) == 2);
-    try std.testing.expect(@as(u3, @bitCast(Permissions{ .read = 0, .write = 1, .execute = 1 })) == 3);
-    try std.testing.expect(@as(u3, @bitCast(Permissions{ .read = 1, .write = 0, .execute = 0 })) == 4);
-    try std.testing.expect(@as(u3, @bitCast(Permissions{ .read = 1, .write = 0, .execute = 1 })) == 5);
-    try std.testing.expect(@as(u3, @bitCast(Permissions{ .read = 1, .write = 1, .execute = 0 })) == 6);
-    try std.testing.expect(@as(u3, @bitCast(Permissions{ .read = 1, .write = 1, .execute = 1 })) == 7);
 }
 
 

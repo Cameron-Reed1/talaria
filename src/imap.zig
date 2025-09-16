@@ -86,7 +86,9 @@ const Connection = struct {
             try self.unselect_mailbox();
         }
 
-        self.mailbox = try mailbox.get(name);
+        const user_db = try user_dbs.get(allocator, self.user.?);
+        defer user_db.close();
+        self.mailbox = try mailbox.get(&user_db, name);
 
         if (self.mailbox) |mb| {
             try self.send(Response{ .tag = null, .type = .flags, .text = "" });
@@ -524,3 +526,4 @@ const root = @import("root");
 const sasl = @import("sasl.zig");
 const user_store = @import("user_store.zig");
 const mailbox = @import("mailbox.zig");
+const user_dbs = @import("db/user.zig");

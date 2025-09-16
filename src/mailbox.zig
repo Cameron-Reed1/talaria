@@ -1,20 +1,23 @@
+// TODO: Update this to use user db's instead of attempting to use the main db
+
+
 pub const MailboxError = error {
     DoesNotExist,
     BadDBState,
 };
 
-pub fn create(name: []const u8) !i32 {
-    return db_manager.MailboxesTable.insert(1, .{ .name }, .{ name });
+pub fn create(user_db: *const user_dbs.UserDB, name: []const u8) !i32 {
+    return user_db.mailboxes.insert(1, .{ .name }, .{ name });
 }
 
-pub fn get(name: []const u8) !Mailbox {
+pub fn get(user_db: *const user_dbs.UserDB, name: []const u8) !Mailbox {
     var id: i64 = 0;
     var uid_validity: u32 = 0;
     var msg_count: u32 = 0;
     var next_uid: u32 = 0;
 
     {
-        const res = try db_manager.MailboxesTable.select(2, .{ .id, .uid_validity }, "name=?", .{ name });
+        const res = try user_db.mailboxes.select(2, .{ .id, .uid_validity }, "WHERE name=?", .{ name });
         defer res.close();
 
         if (!try res.next()) return MailboxError.DoesNotExist;
@@ -24,7 +27,7 @@ pub fn get(name: []const u8) !Mailbox {
     }
 
     {
-        const res = try db_manager.MessagesTable.select(1, .{ .uid }, "mailbox_id=? ORDER BY uid", .{ id });
+        const res = try user_db.messages.select(1, .{ .uid }, "WHERE mailbox_id=? ORDER BY uid", .{ id });
 
         while (try res.next()) {
             msg_count += 1;
@@ -45,4 +48,4 @@ pub const Mailbox = struct {
 };
 
 
-const db_manager = @import("db_manager.zig");
+const user_dbs = @import("db/user.zig");

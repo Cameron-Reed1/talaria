@@ -13,11 +13,11 @@ pub fn create_user(allocator: std.mem.Allocator, username: []const u8, passwd: [
     var buf: [128]u8 = undefined;
     const hash = try argon2.strHash(passwd, .{ .allocator = allocator, .params = .{ .t = 3, .m = 32, .p = 4 } }, &buf);
 
-    return try db_manager.UsersTable.insert(2, .{ .username, .password_hash }, .{ username, hash });
+    return try main_db.UsersTable.insert(2, .{ .username, .password_hash }, .{ username, hash });
 }
 
 fn get_passwd_hash(allocator: std.mem.Allocator, username: []const u8) !?[]const u8 {
-    const result = try db_manager.UsersTable.select(1, .{ .password_hash }, "username=?", .{ username });
+    const result = try main_db.UsersTable.select(1, .{ .password_hash }, "WHERE username=?", .{ username });
     defer result.close();
 
     if (!try result.next()) return null;
@@ -35,5 +35,4 @@ fn get_passwd_hash(allocator: std.mem.Allocator, username: []const u8) !?[]const
 const std = @import("std");
 const argon2 = std.crypto.pwhash.argon2;
 
-const db_manager = @import("db_manager.zig");
-const sqlite = @import("sqlite.zig");
+const main_db = @import("db/main.zig");
