@@ -14,7 +14,7 @@ Talaria is a (very early) WIP all-in-one email server
 
 ### Prerequisites
 
-- (zig)[https://ziglang.org] v0.15.1
+- [zig](https://ziglang.org) v0.15.1
 
 ```bash
 git clone https://github.com/Cameron-Reed1/talaria.git
