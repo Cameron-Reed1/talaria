@@ -23,8 +23,6 @@ const Connection = struct {
         logout,
     };
 
-    const BYE = Response{ .tag = null, .type = .bye, .text = "" };
-
     allocator: std.mem.Allocator,
     fd: std.posix.fd_t,
     reader: *std.Io.Reader,
@@ -58,7 +56,7 @@ const Connection = struct {
         const tag = try self.reader.takeDelimiterExclusive(' '); // TODO: with the new readers, this can be invalidated by the next line. I already wanted to move to a read_line style like in smtp, but now it's real important
         var input = self.reader.takeDelimiterExclusive('\n') catch |err| {
             if (err == error.StreamTooLong) {
-                try self.send(.{ .tag = tag, .type = .bad, .text = "Command too long" });
+                try self.send(tag, .bad, "Command too long", .{});
             }
             return err;
         };
@@ -77,7 +75,7 @@ const Connection = struct {
         if (self.state() == .selected) {
             self.mailbox = null;
 
-            try self.send(.{ .tag = null, .type = .ok, .text = "[CLOSED] Previous mailbox is now closed" });
+            try self.send(null, .ok, "[CLOSED] Previous mailbox is now closed", .{});
         }
     }
 
@@ -91,34 +89,37 @@ const Connection = struct {
         self.mailbox = try mailbox.get(&user_db, name);
 
         if (self.mailbox) |mb| {
-            try self.send(Response{ .tag = null, .type = .flags, .text = "" });
-            const count_str = try std.fmt.allocPrint(allocator, "{}", .{ mb.msg_count });
-            defer allocator.free(count_str);
-            try self.send(Response{ .tag = null, .type = .exists, .text = count_str });
-        }
+            try self.send(null, .exists, "{d}", .{ mb.msg_count });
+            try self.send(null, .ok, "[UIDVALIDITY {d}] UIDs valid", .{ mb.uid_validity });
+            try self.send(null, .ok,  "[UIDNEXT {}] Predicted next UID", .{ mb.next_uid });
+            try self.send(null, .flags, "", .{});
+            try self.send(null, .ok, "[PERMANENTFLAGS ()] Limited", .{});
+            try self.send(null, .list, "() \"/\" INBOX", .{});
+        } else unreachable;
     }
 
-    fn send(self: *Connection, msg: Response) !void {
-        const tag = msg.tag orelse "*";
-        const fmt = "{s} {s} {s}";
+    fn send(self: *Connection, msg_tag: ?[]const u8, msg_type: ResponseType, comptime format: []const u8, args: anytype) !void {
+        const tag = msg_tag orelse "*";
+        const fmt = "{s} {s} " ++ format;
 
-        if (msg.type == .exists) {
-            logger.debug(fmt, .{ tag, msg.text, msg.type.str() });
-            try self.writer.print(fmt ++ "\r\n", .{ tag, msg.text, msg.type.str() });
+        if (msg_type == .exists) {
+            logger.debug(fmt, .{ tag, msg_type.str() } ++ args);
+            try self.writer.print(fmt ++ "\r\n", .{ tag, msg_type.str() } ++ args);
         } else {
-            logger.debug(fmt, .{ tag, msg.type.str(), msg.text });
-            try self.writer.print(fmt ++ "\r\n", .{ tag, msg.type.str(), msg.text });
+            logger.debug(fmt, .{ tag, msg_type.str() } ++ args);
+            try self.writer.print(fmt ++ "\r\n", .{ tag, msg_type.str() } ++ args);
         }
+        try self.writer.flush();
     }
 
     fn bye(self: *Connection) !void {
-        try self.send(BYE);
+        try self.send(null, .bye, "", .{});
     }
 };
 
 
 fn handle_noop(conn: *Connection, cmd: *const Command) !void {
-    try conn.send(cmd.ok("NOOP completed"));
+    try conn.send(cmd.tag, .ok, "NOOP completed", .{});
 }
 
 
@@ -131,31 +132,31 @@ fn handle_logout(conn: *Connection, cmd: *const Command) !void {
         conn.allocator.free(user);
     }
 
-    try conn.send(cmd.ok("LOGOUT completed"));
+    try conn.send(cmd.tag, .ok, "LOGOUT completed", .{});
 }
 
 
 fn handle_capability(conn: *Connection, cmd: *const Command) !void {
     const capabilities = "IMAP4rev2 AUTH=PLAIN";
-    try conn.send(.{ .tag = null, .type = .capability, .text = capabilities });
-    try conn.send(cmd.ok("CAPABILITY completed"));
+    try conn.send(null, .capability, capabilities, .{});
+    try conn.send(cmd.tag, .ok, "CAPABILITY completed", .{});
 }
 
 
 fn handle_starttls(conn: *Connection, cmd: *const Command) !void {
     if (conn.state() != .not_authenticated) {
-        try conn.send(cmd.bad("STARTTLS is only valid in the \"not authenticated\" state"));
+        try conn.send(cmd.tag, .bad, "STARTTLS is only valid in the \"not authenticated\" state", .{});
         return;
     }
 
     // Currently only uses implicit tls port, so all connections are already using TLS
-    try conn.send(cmd.bad("Connection is already using TLS"));
+    try conn.send(cmd.tag, .bad, "Connection is already using TLS", .{});
 }
 
 
 fn handle_authenticate(conn: *Connection, cmd: *const Command, method: []const u8, b64_details: []const u8) !void {
     if (conn.state() != .not_authenticated) {
-        try conn.send(cmd.bad("AUTHENTICATE is only valid in the \"not authenticated\" state"));
+        try conn.send(cmd.tag, .bad, "AUTHENTICATE is only valid in the \"not authenticated\" state", .{});
         return;
     }
 
@@ -167,16 +168,16 @@ fn handle_authenticate(conn: *Connection, cmd: *const Command, method: []const u
 
     if (success) {
         conn.user = try conn.allocator.dupe(u8, user_details.authzid);
-        try conn.send(cmd.ok("AUTHENTICATE successful"));
+        try conn.send(cmd.tag, .ok, "AUTHENTICATE successful", .{});
     } else {
-        try conn.send(cmd.no("AUTHENTICATE failed"));
+        try conn.send(cmd.tag, .no, "AUTHENTICATE failed", .{});
     }
 }
 
 
 fn handle_login(conn: *Connection, cmd: *const Command, username: []const u8, password: []const u8) !void {
     if (conn.state() != .not_authenticated) {
-        try conn.send(cmd.bad("LOGIN is only valid in the \"not authenticated\" state"));
+        try conn.send(cmd.tag, .bad, "LOGIN is only valid in the \"not authenticated\" state", .{});
         return;
     }
 
@@ -184,54 +185,58 @@ fn handle_login(conn: *Connection, cmd: *const Command, username: []const u8, pa
 
     if (success) {
         conn.user = try conn.allocator.dupe(u8, username);
-        try conn.send(cmd.ok("LOGIN completed"));
+        try conn.send(cmd.tag, .ok, "LOGIN completed", .{});
     } else {
-        try conn.send(cmd.no("LOGIN failed"));
+        try conn.send(cmd.tag, .no, "LOGIN failed", .{});
     }
 }
 
 
 fn handle_enable(conn: *Connection, cmd: *const Command) !void {
     if (conn.state() != .authenticated) {
-        try conn.send(cmd.bad("ENABLE is only valid in the \"authenticated\" state"));
+        try conn.send(cmd.tag, .bad, "ENABLE is only valid in the \"authenticated\" state", .{});
         return;
     }
 
     // We don't support any extensions yet
-    try conn.send(.{ .tag = null, .type = .enabled, .text = "" });
-    try conn.send(cmd.ok("ENABLE completed"));
+    try conn.send(null, .enabled, "", .{});
+    try conn.send(cmd.tag, .ok, "ENABLE completed", .{});
 }
 
 
 fn handle_select(conn: *Connection, cmd: *const Command, mb_name: []const u8) !void {
     if (conn.user == null) {
-        try conn.send(cmd.bad("SELECT is not valid in current state"));
+        try conn.send(cmd.tag, .bad, "SELECT is not valid in current state", .{});
         return;
     }
 
     conn.select_mailbox(conn.allocator, mb_name) catch {
-        try conn.send(cmd.no("Failed to select requested mailbox"));
+        try conn.send(cmd.tag, .no, "Failed to select requested mailbox", .{});
         return;
     };
 
-    try conn.send(cmd.ok("SELECT completed"));
+    if (conn.mailbox.?.read_only) {
+        try conn.send(cmd.tag, .ok, "[READ-ONLY] SELECT completed", .{});
+    } else {
+        try conn.send(cmd.tag, .ok, "[READ-WRITE] SELECT completed", .{});
+    }
 }
 
 fn handle_examine(conn: *Connection, cmd: *const Command, mb_name: []const u8) !void {
     if (conn.user == null) {
-        try conn.send(cmd.bad("EXAMINE is not valid in current state"));
+        try conn.send(cmd.tag, .bad, "EXAMINE is not valid in current state", .{});
         return;
     }
 
     conn.select_mailbox(conn.allocator, mb_name) catch {
-        try conn.send(cmd.no("Failed to select requested mailbox"));
+        try conn.send(cmd.tag, .no, "Failed to select requested mailbox", .{});
         return;
     };
 
     if (conn.mailbox != null) {
         conn.mailbox.?.read_only = true;
     }
-    try conn.send(cmd.ok("[READ-ONLY] EXAMINE completed"));
+    try conn.send(cmd.tag, .ok, "[READ-ONLY] EXAMINE completed", .{});
 }
 
 
@@ -272,54 +277,36 @@ const Command = struct {
         };
     }
 
-    fn ok(self: *const Command, text: []const u8) Response {
-        return .{ .tag = self.tag, .type = .ok, .text = text };
-    }
-
-    fn no(self: *const Command, text: []const u8) Response {
-        return .{ .tag = self.tag, .type = .no, .text = text };
-    }
-
-    fn bad(self: *const Command, text: []const u8) Response {
-        return .{ .tag = self.tag, .type = .bad, .text = text };
-    }
-
     fn deinit(self: *const Command, allocator: std.mem.Allocator) void {
         allocator.free(self.cmd);
         allocator.free(self.args);
     }
 };
 
-const Response = struct {
-    const Type = enum {
-        ok,
-        no,
-        bad,
-        bye,
-        list,
-        flags,
-        exists,
-        enabled,
-        preauth,
-        capability,
+const ResponseType = enum {
+    ok,
+    no,
+    bad,
+    bye,
+    list,
+    flags,
+    exists,
+    enabled,
+    preauth,
+    capability,
 
-        fn str(self: Type) []const u8 {
-            inline for(@typeInfo(Type).@"enum".fields) |fields| {
-                if (@intFromEnum(self) == fields.value) {
-                    comptime var name_buf: [fields.name.len]u8 = undefined;
-                    _ = comptime std.ascii.upperString(&name_buf, fields.name);
-                    const name = name_buf;
+    fn str(self: ResponseType) []const u8 {
+        inline for(@typeInfo(ResponseType).@"enum".fields) |fields| {
+            if (@intFromEnum(self) == fields.value) {
+                comptime var name_buf: [fields.name.len]u8 = undefined;
+                _ = comptime std.ascii.upperString(&name_buf, fields.name);
+                const name = name_buf;
 
-                    return &name;
-                }
+                return &name;
             }
-            unreachable;
         }
-    };
-
-    tag: ?[]const u8,
-    type: Type,
-    text: []const u8,
+        unreachable;
+    }
 };
 
 pub const Server = struct {
@@ -370,8 +357,7 @@ pub const Server = struct {
 
         var conn = Connection{ .allocator = ca.allocator(), .logged_out = false, .user = null, .fd = tcp.stream.handle, .reader = &reader.interface, .writer = &writer.interface, .read_buf = undefined, .mailbox = null };
 
-        conn.send(Response{ .tag = null, .type = .ok, .text = "[CAPABILITY IMAP4rev2 AUTH=PLAIN] IMAP4rev2 Service Ready" }) catch {
-        // conn.send(Response{ .tag = null, .type = .ok, .text = "IMAP4rev2 Service Ready" }) catch {
+        conn.send(null, .ok, "[CAPABILITY IMAP4rev2 AUTH=PLAIN] IMAP4rev2 Service Ready", .{}) catch {
             logger.err("Failed to send greeting", .{});
             return;
         };
@@ -389,12 +375,12 @@ pub const Server = struct {
             if (handlers.get(cmd.cmd)) |cmd_handler| {
                 cmd_handler(&conn, &cmd) catch |err| {
                     switch (err) {
-                        error.InvalidArguments => conn.send(cmd.bad("Invalid arguments")) catch break,
+                        error.InvalidArguments => conn.send(cmd.tag, .bad, "Invalid arguments", .{}) catch break,
                         else => break,
                     }
                 };
             } else {
-                conn.send(.{ .tag = cmd.tag, .type = .bad, .text = "Unknown command" }) catch break;
+                conn.send(cmd.tag, .bad, "Unknown command", .{}) catch break;
             }
         }
 
